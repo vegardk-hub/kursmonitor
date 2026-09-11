@@ -111,6 +111,30 @@
   tr.row-error td{color:var(--ink-muted);font-style:italic;}
   tr.row-pending td{color:var(--ink-muted);}
 
+  .history-head{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:14px;}
+  .history-head select{
+    padding:8px 10px;border-radius:7px;border:1px solid var(--border-strong);
+    background:var(--bg);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer;
+  }
+  .history-actions{display:flex;gap:8px;}
+  .btn-ghost{
+    font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;letter-spacing:.02em;
+    background:var(--surface-2);color:var(--ink-2);border:1px solid var(--border-strong);border-radius:7px;
+    padding:8px 14px;font-size:12.5px;cursor:pointer;
+  }
+  .btn-ghost:hover{color:var(--ink);}
+  .btn-ghost.danger:hover{color:var(--down);border-color:var(--down);}
+  .history-chart-wrap{position:relative;}
+  .history-tooltip{
+    position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);
+    font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 9px;border-radius:6px;
+    opacity:0;transform:translate(-50%,-115%);transition:opacity .1s;white-space:nowrap;z-index:5;
+  }
+  .history-tooltip.show{opacity:1;}
+  .history-crosshair{stroke:var(--ink-muted);stroke-width:1;stroke-dasharray:3 3;opacity:0;}
+  .history-crosshair.show{opacity:1;}
+  .history-meta{font-size:11.5px;color:var(--ink-muted);margin-top:10px;}
+
   footer{margin-top:26px;font-size:12px;color:var(--ink-muted);line-height:1.6;}
   footer a{color:var(--ink-2);}
 </style>
@@ -179,10 +203,29 @@
     </table>
   </div>
 
+  <div class="setup" id="historyBox">
+    <div class="history-head">
+      <div>
+        <label for="historySymbol" style="margin-bottom:5px;">Historikk &mdash; følg utviklingen</label>
+        <select id="historySymbol"><option value="">– velg symbol –</option></select>
+      </div>
+      <div class="history-actions">
+        <button type="button" class="btn-ghost" id="exportBtn">Eksporter alt (CSV)</button>
+        <button type="button" class="btn-ghost danger" id="clearHistoryBtn">Tøm historikk</button>
+      </div>
+    </div>
+    <div class="history-chart-wrap" id="historyChartWrap">
+      <p class="hint" style="margin:0;">Ingen historikk lagret ennå &mdash; hver vellykkede henting lagres automatisk, uansett hvilke aksjer eller hvor ofte du henter. Kom tilbake hit etter du har hentet noen kurser.</p>
+    </div>
+    <p class="history-meta" id="historyMeta"></p>
+  </div>
+
   <footer>
     Data: <a href="https://finnhub.io" target="_blank" rel="noopener">Finnhub</a> gratis-API (60 kall/min, sanntid for amerikanske aksjer, personlig/ikke-kommersiell bruk). Nøkkelen sendes direkte fra din nettleser til Finnhub sitt API &mdash; den går aldri via noen mellomtjener.
     <br><br>
     Handelsvinduet over viser ordinær åpningstid (09:30&ndash;16:00 amerikansk østkysttid, NASDAQ/NYSE), regnet om til din lokale tid og korrigert for sommertid automatisk. Den tar <strong>ikke</strong> høyde for amerikanske børshelligdager (f.eks. Thanksgiving, 4. juli, Labor Day) &mdash; markedet kan vise «åpent» på dager det i praksis er stengt.
+    <br><br>
+    Historikken lagres i denne nettleseren (IndexedDB) &mdash; knyttet til denne maskinen/nettleseren, ikke til Finnhub-kontoen din. Rydder du nettleserdata eller bytter enhet, forsvinner den. Bruk «Eksporter alt (CSV)» jevnlig hvis du vil ta vare på den et annet sted.
   </footer>
 </div>
 
@@ -378,12 +421,215 @@ async function fetchOne(symbol, key){
       rows[symbol] = { symbol, error: 'Ukjent symbol' };
     } else {
       rows[symbol] = { symbol, c: data.c, d: data.d, dp: data.dp, h: data.h, l: data.l, pc: data.pc };
+      const observation = { symbol, t: Date.now(), c: data.c, d: data.d, dp: data.dp, h: data.h, l: data.l, pc: data.pc };
+      saveObservation(observation).then(() => onObservationSaved(symbol));
     }
   } catch (err) {
     rows[symbol] = { symbol, error: 'Henting feilet' };
   }
   renderTable();
 }
+
+// --- Historikk (IndexedDB) ---
+// Én flat logg av observasjoner (symbol + tidspunkt + tallene) i stedet for én rad
+// per "økt" — det gjør at det ikke spiller noen rolle hvilke aksjer eller hvor ofte
+// man henter; historikken for hvert enkelt symbol bygger seg opp i sitt eget tempo.
+
+const HISTORY_DB = 'kursmonitor';
+const HISTORY_STORE = 'observations';
+
+function openHistoryDb(){
+  if (!('indexedDB' in window)) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const req = indexedDB.open(HISTORY_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      const store = db.createObjectStore(HISTORY_STORE, { keyPath: 'id', autoIncrement: true });
+      store.createIndex('by_symbol', 'symbol', { unique: false });
+      store.createIndex('by_symbol_t', ['symbol', 't'], { unique: false });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+}
+const historyDbPromise = openHistoryDb();
+
+async function saveObservation(rec){
+  const db = await historyDbPromise;
+  if (!db) return;
+  try { db.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE).add(rec); }
+  catch (e) { /* best-effort local cache — never block the UI on a storage failure */ }
+}
+
+async function getHistorySymbols(){
+  const db = await historyDbPromise;
+  if (!db) return [];
+  return new Promise(resolve => {
+    const seen = new Set();
+    const req = db.transaction(HISTORY_STORE, 'readonly').objectStore(HISTORY_STORE).index('by_symbol').openKeyCursor();
+    req.onsuccess = e => {
+      const cursor = e.target.result;
+      if (cursor){ seen.add(cursor.key); cursor.continue(); } else resolve([...seen].sort());
+    };
+    req.onerror = () => resolve([...seen].sort());
+  });
+}
+
+async function getHistoryFor(symbol){
+  const db = await historyDbPromise;
+  if (!db) return [];
+  return new Promise(resolve => {
+    const out = [];
+    const range = IDBKeyRange.bound([symbol, -Infinity], [symbol, Infinity]);
+    const req = db.transaction(HISTORY_STORE, 'readonly').objectStore(HISTORY_STORE).index('by_symbol_t').openCursor(range);
+    req.onsuccess = e => {
+      const cursor = e.target.result;
+      if (cursor){ out.push(cursor.value); cursor.continue(); } else resolve(out);
+    };
+    req.onerror = () => resolve(out);
+  });
+}
+
+async function getAllHistory(){
+  const db = await historyDbPromise;
+  if (!db) return [];
+  return new Promise(resolve => {
+    const req = db.transaction(HISTORY_STORE, 'readonly').objectStore(HISTORY_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+const historySymbolEl = document.getElementById('historySymbol');
+const historyChartWrap = document.getElementById('historyChartWrap');
+const historyMetaEl = document.getElementById('historyMeta');
+let knownHistorySymbols = new Set();
+
+async function refreshHistorySymbolOptions(preferSymbol){
+  const symbols = await getHistorySymbols();
+  const isNew = symbols.some(s => !knownHistorySymbols.has(s));
+  if (!isNew && symbols.length === knownHistorySymbols.size) return;
+  knownHistorySymbols = new Set(symbols);
+
+  const current = historySymbolEl.value;
+  historySymbolEl.innerHTML = '<option value="">– velg symbol –</option>' +
+    symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+  const toSelect = preferSymbol && symbols.includes(preferSymbol) ? preferSymbol
+    : (symbols.includes(current) ? current : (symbols[0] || ''));
+  historySymbolEl.value = toSelect;
+  if (toSelect) renderHistoryChart(toSelect);
+}
+
+async function onObservationSaved(symbol){
+  await refreshHistorySymbolOptions(historySymbolEl.value ? undefined : symbol);
+  if (historySymbolEl.value === symbol) renderHistoryChart(symbol);
+}
+
+historySymbolEl.addEventListener('change', () => {
+  if (historySymbolEl.value) renderHistoryChart(historySymbolEl.value);
+});
+
+async function renderHistoryChart(symbol){
+  const history = (await getHistoryFor(symbol)).sort((a,b) => a.t - b.t);
+  if (history.length === 0){
+    historyChartWrap.innerHTML = '<p class="hint" style="margin:0;">Ingen historikk for dette symbolet ennå.</p>';
+    historyMetaEl.textContent = '';
+    return;
+  }
+  if (history.length === 1){
+    const r = history[0];
+    historyChartWrap.innerHTML = `<p class="hint" style="margin:0;">Kun én observasjon så langt ($${r.c.toFixed(2)}, ${new Date(r.t).toLocaleString('no-NO')}) &mdash; hent på nytt senere for å begynne å se en utvikling.</p>`;
+    historyMetaEl.textContent = '';
+    return;
+  }
+
+  const W = 760, H = 220, padL = 54, padR = 16, padT = 16, padB = 26;
+  const prices = history.map(h => h.c);
+  const minP = Math.min(...prices), maxP = Math.max(...prices);
+  const padP = (maxP - minP) * 0.1 || Math.max(minP * 0.02, 1);
+  const yMin = minP - padP, yMax = maxP + padP;
+  const minT = history[0].t, maxT = history[history.length - 1].t;
+  const spanT = Math.max(maxT - minT, 1);
+
+  const xOf = t => padL + (t - minT) / spanT * (W - padL - padR);
+  const yOf = p => padT + (1 - (p - yMin) / (yMax - yMin)) * (H - padT - padB);
+
+  const pts = history.map(h => `${xOf(h.t).toFixed(1)},${yOf(h.c).toFixed(1)}`).join(' ');
+  const area = `${xOf(minT).toFixed(1)},${yOf(yMin).toFixed(1)} ${pts} ${xOf(maxT).toFixed(1)},${yOf(yMin).toFixed(1)}`;
+  const last = history[history.length - 1];
+  const fmtDT = t => new Date(t).toLocaleString('no-NO',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+
+  let grid = '';
+  for (let i = 0; i <= 4; i++){
+    const gv = yMin + (yMax - yMin) * i / 4;
+    const gy = yOf(gv);
+    grid += `<line x1="${padL}" x2="${W-padR}" y1="${gy.toFixed(1)}" y2="${gy.toFixed(1)}" style="stroke:var(--border);stroke-width:1"/>`;
+    grid += `<text x="${padL-8}" y="${(gy+3).toFixed(1)}" text-anchor="end" font-size="9" style="fill:var(--ink-muted)">$${gv.toFixed(2)}</text>`;
+  }
+
+  historyChartWrap.innerHTML = `
+    <svg id="historySvg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;">
+      ${grid}
+      <polygon points="${area}" style="fill:var(--up-soft)"/>
+      <polyline points="${pts}" style="fill:none;stroke:var(--accent);stroke-width:2"/>
+      <circle cx="${xOf(last.t).toFixed(1)}" cy="${yOf(last.c).toFixed(1)}" r="4" style="fill:var(--accent)"/>
+      <text x="${(xOf(last.t)-8).toFixed(1)}" y="${(yOf(last.c)-8).toFixed(1)}" text-anchor="end" font-size="10" font-weight="700" style="fill:var(--ink)">$${last.c.toFixed(2)}</text>
+      <text x="${padL}" y="${H-8}" font-size="9" style="fill:var(--ink-muted)">${fmtDT(minT)}</text>
+      <text x="${W-padR}" y="${H-8}" text-anchor="end" font-size="9" style="fill:var(--ink-muted)">${fmtDT(maxT)}</text>
+      <line id="historyCrosshair" class="history-crosshair" x1="0" x2="0" y1="${padT}" y2="${H-padB}"/>
+    </svg>
+    <div class="history-tooltip" id="historyTooltip"></div>`;
+
+  const svg = document.getElementById('historySvg');
+  const crosshair = document.getElementById('historyCrosshair');
+  const tooltip = document.getElementById('historyTooltip');
+
+  svg.addEventListener('mousemove', e => {
+    const rect = svg.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const xInViewBox = (e.clientX - rect.left) * scaleX;
+    const t = minT + (xInViewBox - padL) / (W - padL - padR) * spanT;
+    let nearest = history[0], bestDiff = Infinity;
+    for (const h of history){ const diff = Math.abs(h.t - t); if (diff < bestDiff){ bestDiff = diff; nearest = h; } }
+    const px = xOf(nearest.t);
+    crosshair.setAttribute('x1', px.toFixed(1));
+    crosshair.setAttribute('x2', px.toFixed(1));
+    crosshair.classList.add('show');
+    tooltip.innerHTML = `<b>$${nearest.c.toFixed(2)}</b> ${fmtDT(nearest.t)}`;
+    tooltip.style.left = (px / W * rect.width) + 'px';
+    tooltip.style.top = yOf(nearest.c) / H * rect.height + 'px';
+    tooltip.classList.add('show');
+  });
+  svg.addEventListener('mouseleave', () => { crosshair.classList.remove('show'); tooltip.classList.remove('show'); });
+
+  historyMetaEl.textContent = `${history.length} observasjoner lagret for ${symbol} · fra ${fmtDT(minT)} til ${fmtDT(maxT)}`;
+}
+
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  const all = (await getAllHistory()).sort((a,b) => a.symbol.localeCompare(b.symbol) || a.t - b.t);
+  if (all.length === 0){ alert('Ingen historikk å eksportere ennå.'); return; }
+  const header = 'symbol,tidspunkt,pris,endring,endring_pct,hoy,lav,forrige_lukk\n';
+  const body = all.map(r => [r.symbol, new Date(r.t).toISOString(), r.c, r.d, r.dp, r.h, r.l, r.pc].join(',')).join('\n');
+  const blob = new Blob([header + body], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `kursmonitor-historikk-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('clearHistoryBtn').addEventListener('click', async () => {
+  if (!confirm('Slette all lagret historikk permanent? Dette kan ikke angres.')) return;
+  const db = await historyDbPromise;
+  if (db) db.transaction(HISTORY_STORE, 'readwrite').objectStore(HISTORY_STORE).clear();
+  knownHistorySymbols = new Set();
+  historySymbolEl.innerHTML = '<option value="">– velg symbol –</option>';
+  historyChartWrap.innerHTML = '<p class="hint" style="margin:0;">Historikken er tømt.</p>';
+  historyMetaEl.textContent = '';
+});
+
+refreshHistorySymbolOptions();
 
 function startCooldown(usedCalls){
   // Cooldown scales with how much of the 60-calls/minute budget this batch spent,
