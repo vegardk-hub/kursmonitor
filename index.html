@@ -135,6 +135,28 @@
   .history-crosshair.show{opacity:1;}
   .history-meta{font-size:11.5px;color:var(--ink-muted);margin-top:10px;}
 
+  .weights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;}
+  .weights-grid label{font-size:11px;}
+  .disclaimer-box{
+    background:var(--down-soft);border:1px solid var(--border);border-left:3px solid var(--down);
+    border-radius:8px;padding:12px 14px;font-size:12px;color:var(--ink-2);line-height:1.6;margin-top:16px;
+  }
+  .disclaimer-box b{color:var(--ink);}
+
+  td.pred{font-style:italic;border-bottom-style:dashed;}
+  td.pred.up{color:var(--up);} td.pred.down{color:var(--down);}
+  .pred-badge{
+    display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;
+    color:var(--accent);border:1px solid var(--accent);border-radius:3px;padding:0 3px;margin-right:4px;vertical-align:1px;font-style:normal;
+  }
+  td.pred-empty{color:var(--ink-muted);font-style:normal;}
+
+  .pred-compare-head,.pred-compare-row{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:8px;padding:6px 2px;font-size:12px;border-bottom:1px solid var(--border);}
+  .pred-compare-head{font-family:'Barlow Semi Condensed',sans-serif;text-transform:uppercase;letter-spacing:.04em;font-size:10.5px;color:var(--ink-muted);border-bottom:1px solid var(--border-strong);}
+  .pred-compare-row span{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+  .pred-compare-row .pred-val{color:var(--accent);font-style:italic;}
+  .pred-compare-row .up{color:var(--up);} .pred-compare-row .down{color:var(--down);}
+
   footer{margin-top:26px;font-size:12px;color:var(--ink-muted);line-height:1.6;}
   footer a{color:var(--ink-2);}
 </style>
@@ -184,6 +206,24 @@
     <b>Gratisnivået tillater 60 API-kall i minuttet</b>, og <code>/quote</code> gir én aksje per kall &mdash; det finnes ikke noe samle-endepunkt. Velg hvor mange aksjer du vil hente av gangen: et lite antall (f.eks. 10) bruker lite av budsjettet og er klart igjen for ny henting på sekunder, mens 60 bruker hele minuttbudsjettet. Knappen låses proporsjonalt med antallet du henter, slik at du ikke går tom for kall (kode 429).
   </div>
 
+  <div class="setup" id="predictBox">
+    <label style="margin-bottom:5px;">Prediksjonsmodell <span style="font-weight:400;text-transform:none;">(eksperimentell)</span></label>
+    <p class="hint" style="margin-bottom:14px;">Forenklet faktormodell &mdash; markedsbeta &times; S&amp;P 500-bevegelse, momentum, verdi (P/B) og størrelse (market cap) fra Finnhubs fundamentaldata, pluss krypto-bevegelse som proxy for stemningen i verden mens USA er stengt. Dempes ved stor oljebevegelse eller aktive sikkerhetsvarsler (via <a href="https://americasoilwatch.com/api" target="_blank" rel="noopener">AmericasOilWatch</a>, offisiell EIA/MARAD/CENTCOM-data). Virker på aksjene som står i tabellen under.</p>
+
+    <label style="margin-bottom:5px;">Modellvekter</label>
+    <div class="weights-grid" id="weightsGrid"></div>
+    <button type="button" class="btn-ghost" id="resetWeightsBtn" style="margin-top:10px;">Tilbakestill til utgangspunkt</button>
+
+    <div class="fetch-row" style="margin-top:18px;">
+      <button id="predictBtn">Beregn prediksjon</button>
+      <span class="fetch-status" id="predictStatus"></span>
+    </div>
+
+    <div class="disclaimer-box">
+      <b>Ikke investeringsråd.</b> Dette er en eksperimentell heuristikk basert på offentlig fundamentaldata og grove makro-proxyer &mdash; <em>ikke</em> en validert statistisk modell, og ikke en ekte regresjon mot Fama-French sine faktordata (krever historiske avkastningsserier som ikke er fritt tilgjengelig). Kortsiktig aksjeprediksjon er notorisk vanskelig. Se «Prediksjon vs. faktisk» i historikken under for modellens reelle treffsikkerhet over tid, i stedet for å stole blindt på tallet.
+    </div>
+  </div>
+
   <div class="table-wrap">
     <table>
       <thead>
@@ -195,10 +235,11 @@
           <th data-key="h">Høy</th>
           <th data-key="l">Lav</th>
           <th data-key="pc">Forrige lukk</th>
+          <th data-key="predPct">Prediksjon <span class="arrow">&#8597;</span></th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="7" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>
       </tbody>
     </table>
   </div>
@@ -218,6 +259,7 @@
       <p class="hint" style="margin:0;">Ingen historikk lagret ennå &mdash; hver vellykkede henting lagres automatisk, uansett hvilke aksjer eller hvor ofte du henter. Kom tilbake hit etter du har hentet noen kurser.</p>
     </div>
     <p class="history-meta" id="historyMeta"></p>
+    <div id="predCompare"></div>
   </div>
 
   <footer>
@@ -226,6 +268,8 @@
     Handelsvinduet over viser ordinær åpningstid (09:30&ndash;16:00 amerikansk østkysttid, NASDAQ/NYSE), regnet om til din lokale tid og korrigert for sommertid automatisk. Den tar <strong>ikke</strong> høyde for amerikanske børshelligdager (f.eks. Thanksgiving, 4. juli, Labor Day) &mdash; markedet kan vise «åpent» på dager det i praksis er stengt.
     <br><br>
     Historikken lagres i denne nettleseren (IndexedDB) &mdash; knyttet til denne maskinen/nettleseren, ikke til Finnhub-kontoen din. Rydder du nettleserdata eller bytter enhet, forsvinner den. Bruk «Eksporter alt (CSV)» jevnlig hvis du vil ta vare på den et annet sted.
+    <br><br>
+    Olje- og sikkerhetsdata kommer fra <a href="https://americasoilwatch.com/api" target="_blank" rel="noopener">AmericasOilWatch</a>, en tredjeparts aggregator av offentlige kilder (EIA, MARAD, CENTCOM, Yahoo Finance) &mdash; ikke selv en offisiell institusjon, og en ekstern avhengighet utenfor vår kontroll. Prediksjonsmodellen er eksperimentell og <strong>ikke investeringsråd</strong>.
   </footer>
 </div>
 
@@ -351,7 +395,8 @@ const savedCount = localStorage.getItem('finnhub_count');
 countSelect.value = COUNT_OPTIONS.includes(+savedCount) ? savedCount : 60;
 countSelect.addEventListener('change', () => localStorage.setItem('finnhub_count', countSelect.value));
 
-let rows = {};      // symbol -> latest data
+let rows = {};        // symbol -> latest quote data
+let predictions = {}; // symbol -> { pct, direction, t } — cleared each page load, recomputed on demand
 let sortKey = null;
 let sortDir = 1;
 let autoTimer = null;
@@ -367,10 +412,16 @@ function parseSymbols(){
 function renderTable(){
   const list = Object.values(rows);
   if (list.length === 0){
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>';
     return;
   }
-  if (sortKey){
+  if (sortKey === 'predPct'){
+    list.sort((a,b) => {
+      const av = predictions[a.symbol] ? predictions[a.symbol].pct : -Infinity;
+      const bv = predictions[b.symbol] ? predictions[b.symbol].pct : -Infinity;
+      return (av - bv) * sortDir;
+    });
+  } else if (sortKey){
     list.sort((a,b) => {
       const av = a[sortKey], bv = b[sortKey];
       if (av === undefined || av === null) return 1;
@@ -381,12 +432,16 @@ function renderTable(){
   }
   tbody.innerHTML = list.map(r => {
     if (r.pending){
-      return `<tr class="row-pending"><td>${r.symbol}</td><td colspan="6">Henter …</td></tr>`;
+      return `<tr class="row-pending"><td>${r.symbol}</td><td colspan="7">Henter …</td></tr>`;
     }
     if (r.error){
-      return `<tr class="row-error"><td>${r.symbol}</td><td colspan="6">${r.error}</td></tr>`;
+      return `<tr class="row-error"><td>${r.symbol}</td><td colspan="7">${r.error}</td></tr>`;
     }
     const isUp = r.d >= 0;
+    const pred = predictions[r.symbol];
+    const predCell = pred
+      ? `<td class="num pred ${pred.direction === 'opp' ? 'up' : pred.direction === 'ned' ? 'down' : ''}"><span class="pred-badge">P</span>${pred.direction === 'opp' ? '▲' : pred.direction === 'ned' ? '▼' : '—'} ${pred.pct >= 0 ? '+' : ''}${fmt(pred.pct)}%</td>`
+      : `<td class="num pred-empty">–</td>`;
     return `<tr>
       <td>${r.symbol}</td>
       <td class="num">$${fmt(r.c)}</td>
@@ -395,6 +450,7 @@ function renderTable(){
       <td class="num">$${fmt(r.h)}</td>
       <td class="num">$${fmt(r.l)}</td>
       <td class="num">$${fmt(r.pc)}</td>
+      ${predCell}
     </tr>`;
   }).join('');
 }
@@ -421,8 +477,12 @@ async function fetchOne(symbol, key){
       rows[symbol] = { symbol, error: 'Ukjent symbol' };
     } else {
       rows[symbol] = { symbol, c: data.c, d: data.d, dp: data.dp, h: data.h, l: data.l, pc: data.pc };
-      const observation = { symbol, t: Date.now(), c: data.c, d: data.d, dp: data.dp, h: data.h, l: data.l, pc: data.pc };
+      const observedAt = Date.now();
+      const observation = { symbol, t: observedAt, c: data.c, d: data.d, dp: data.dp, h: data.h, l: data.l, pc: data.pc };
       saveObservation(observation).then(() => onObservationSaved(symbol));
+      resolveOldestPrediction(symbol, data.dp, observedAt).then(() => {
+        if (historySymbolEl && historySymbolEl.value === symbol) renderPredictionHistory(symbol);
+      });
     }
   } catch (err) {
     rows[symbol] = { symbol, error: 'Henting feilet' };
@@ -437,16 +497,25 @@ async function fetchOne(symbol, key){
 
 const HISTORY_DB = 'kursmonitor';
 const HISTORY_STORE = 'observations';
+const PREDICTIONS_STORE = 'predictions';
 
 function openHistoryDb(){
   if (!('indexedDB' in window)) return Promise.resolve(null);
   return new Promise(resolve => {
-    const req = indexedDB.open(HISTORY_DB, 1);
+    const req = indexedDB.open(HISTORY_DB, 2);
     req.onupgradeneeded = () => {
       const db = req.result;
-      const store = db.createObjectStore(HISTORY_STORE, { keyPath: 'id', autoIncrement: true });
-      store.createIndex('by_symbol', 'symbol', { unique: false });
-      store.createIndex('by_symbol_t', ['symbol', 't'], { unique: false });
+      if (!db.objectStoreNames.contains(HISTORY_STORE)){
+        const store = db.createObjectStore(HISTORY_STORE, { keyPath: 'id', autoIncrement: true });
+        store.createIndex('by_symbol', 'symbol', { unique: false });
+        store.createIndex('by_symbol_t', ['symbol', 't'], { unique: false });
+      }
+      if (!db.objectStoreNames.contains(PREDICTIONS_STORE)){
+        // predikert kursbevegelse per aksje; actualPct/resolvedAt fylles inn i ettertid
+        // når neste faktiske kurs kommer inn for samme symbol (se resolveOldestPrediction)
+        const pstore = db.createObjectStore(PREDICTIONS_STORE, { keyPath: 'id', autoIncrement: true });
+        pstore.createIndex('by_symbol', 'symbol', { unique: false });
+      }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => resolve(null);
@@ -500,6 +569,40 @@ async function getAllHistory(){
   });
 }
 
+async function getPredictionsFor(symbol){
+  const db = await historyDbPromise;
+  if (!db) return [];
+  return new Promise(resolve => {
+    const out = [];
+    const req = db.transaction(PREDICTIONS_STORE, 'readonly').objectStore(PREDICTIONS_STORE).index('by_symbol').openCursor(IDBKeyRange.only(symbol));
+    req.onsuccess = e => { const c = e.target.result; if (c){ out.push(c.value); c.continue(); } else resolve(out); };
+    req.onerror = () => resolve(out);
+  });
+}
+
+async function savePrediction(rec){
+  const db = await historyDbPromise;
+  if (!db) return;
+  try { db.transaction(PREDICTIONS_STORE, 'readwrite').objectStore(PREDICTIONS_STORE).add(rec); }
+  catch (e) { /* best-effort */ }
+}
+
+// Kobler en ny faktisk observasjon til den eldste uløste prediksjonen for samme
+// symbol (FIFO) — det gjør "prediksjon vs. faktisk" automatisk, uten at vi må vite
+// nøyaktig når neste handelsdag begynner.
+async function resolveOldestPrediction(symbol, actualPct, resolvedAt){
+  const db = await historyDbPromise;
+  if (!db) return;
+  const pending = (await getPredictionsFor(symbol)).filter(p => p.actualPct === null || p.actualPct === undefined);
+  if (pending.length === 0) return;
+  pending.sort((a,b) => a.t - b.t);
+  const target = pending[0];
+  target.actualPct = actualPct;
+  target.resolvedAt = resolvedAt;
+  try { db.transaction(PREDICTIONS_STORE, 'readwrite').objectStore(PREDICTIONS_STORE).put(target); }
+  catch (e) { /* best-effort */ }
+}
+
 const historySymbolEl = document.getElementById('historySymbol');
 const historyChartWrap = document.getElementById('historyChartWrap');
 const historyMetaEl = document.getElementById('historyMeta');
@@ -522,11 +625,11 @@ async function refreshHistorySymbolOptions(preferSymbol){
 
 async function onObservationSaved(symbol){
   await refreshHistorySymbolOptions(historySymbolEl.value ? undefined : symbol);
-  if (historySymbolEl.value === symbol) renderHistoryChart(symbol);
+  if (historySymbolEl.value === symbol){ renderHistoryChart(symbol); renderPredictionHistory(symbol); }
 }
 
 historySymbolEl.addEventListener('change', () => {
-  if (historySymbolEl.value) renderHistoryChart(historySymbolEl.value);
+  if (historySymbolEl.value){ renderHistoryChart(historySymbolEl.value); renderPredictionHistory(historySymbolEl.value); }
 });
 
 async function renderHistoryChart(symbol){
@@ -605,6 +708,36 @@ async function renderHistoryChart(symbol){
   historyMetaEl.textContent = `${history.length} observasjoner lagret for ${symbol} · fra ${fmtDT(minT)} til ${fmtDT(maxT)}`;
 }
 
+async function renderPredictionHistory(symbol){
+  const el = document.getElementById('predCompare');
+  const preds = (await getPredictionsFor(symbol)).sort((a,b) => b.t - a.t);
+  if (preds.length === 0){ el.innerHTML = ''; return; }
+
+  const resolved = preds.filter(p => p.actualPct !== null && p.actualPct !== undefined);
+  let accuracyHtml = '';
+  if (resolved.length){
+    const flat = v => Math.abs(v) < 0.15;
+    const correct = resolved.filter(p => (Math.sign(p.predictedPct) === Math.sign(p.actualPct)) || (flat(p.predictedPct) && flat(p.actualPct))).length;
+    const avgAbsErr = resolved.reduce((s,p) => s + Math.abs(p.predictedPct - p.actualPct), 0) / resolved.length;
+    accuracyHtml = `<p class="history-meta" style="margin-top:0;">Retning riktig: ${correct}/${resolved.length} (${(correct/resolved.length*100).toFixed(0)}%) · gjennomsnittlig avvik: ${avgAbsErr.toFixed(2)} prosentpoeng</p>`;
+  }
+
+  const rowsHtml = preds.slice(0, 15).map(p => {
+    const when = new Date(p.t).toLocaleString('no-NO',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    const predTxt = `${p.predictedPct >= 0 ? '+' : ''}${p.predictedPct.toFixed(2)}%`;
+    const actualTxt = (p.actualPct === null || p.actualPct === undefined)
+      ? '<span style="color:var(--ink-muted)">venter …</span>'
+      : `<span class="${p.actualPct >= 0 ? 'up' : 'down'}">${p.actualPct >= 0 ? '+' : ''}${p.actualPct.toFixed(2)}%</span>`;
+    return `<div class="pred-compare-row"><span>${when}</span><span class="pred-val">${predTxt}</span>${actualTxt}</div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <h4 style="font-family:'Barlow Semi Condensed',sans-serif;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-2);margin:20px 0 8px;">Prediksjon vs. faktisk &mdash; ${symbol}</h4>
+    ${accuracyHtml}
+    <div class="pred-compare-head"><span>Tidspunkt</span><span>Predikert</span><span>Faktisk</span></div>
+    ${rowsHtml}`;
+}
+
 document.getElementById('exportBtn').addEventListener('click', async () => {
   const all = (await getAllHistory()).sort((a,b) => a.symbol.localeCompare(b.symbol) || a.t - b.t);
   if (all.length === 0){ alert('Ingen historikk å eksportere ennå.'); return; }
@@ -631,23 +764,23 @@ document.getElementById('clearHistoryBtn').addEventListener('click', async () =>
 
 refreshHistorySymbolOptions();
 
-function startCooldown(usedCalls){
-  // Cooldown scales with how much of the 60-calls/minute budget this batch spent,
-  // so a small pull (e.g. 10 aksjer) is available again much sooner than a full 60.
+// "Hent kurser" og "Beregn prediksjon" bruker samme Finnhub-nøkkel og samme
+// 60-kall/minutt-budsjett, så nedtellingen må være delt — ellers kan man trigge
+// den ene rett etter den andre og likevel treffe 429.
+function startGlobalCooldown(usedCalls){
   const seconds = Math.max(usedCalls, 3);
-  cooldownUntil = Date.now() + seconds * 1000;
-  fetchBtn.disabled = true;
-  let remaining = seconds;
-  fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
-  clearInterval(cooldownTimer);
+  cooldownUntil = Math.max(cooldownUntil, Date.now() + seconds * 1000);
+  if (cooldownTimer) return;
   cooldownTimer = setInterval(() => {
-    remaining--;
+    const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
     if (remaining <= 0){
       clearInterval(cooldownTimer);
-      fetchBtn.disabled = false;
-      fetchStatus.textContent = '';
+      cooldownTimer = null;
+      fetchBtn.disabled = false; fetchStatus.textContent = '';
+      predictBtn.disabled = false; predictStatus.textContent = '';
     } else {
-      fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
+      fetchBtn.disabled = true; fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
+      predictBtn.disabled = true; predictStatus.textContent = `Finnhub-budsjett i bruk — ledig om ${remaining}s`;
     }
   }, 1000);
 }
@@ -673,7 +806,7 @@ async function fetchAll(){
   symbols.forEach(s => { rows[s] = { symbol: s, pending: true }; });
   renderTable();
 
-  startCooldown(symbols.length);
+  startGlobalCooldown(symbols.length);
   fetchStatus.textContent = shortOfList
     ? `Henter alle ${symbols.length} (listen din har færre enn ${wanted}) …`
     : `Henter ${symbols.length} kurser …`;
@@ -707,6 +840,191 @@ autoEl.addEventListener('change', () => {
     autoTimer = null;
   }
 });
+
+// --- Prediksjonsmodell (eksperimentell) ---
+// Forenklet faktor-tilt, ikke en ekte Fama-French-regresjon (det krever historiske
+// avkastningsserier vi ikke har gratis tilgang til). Byggeklosser:
+//  - Marked: aksjens egen beta (fra Finnhub-fundamentaldata) × dagens bevegelse i SPY
+//  - Momentum / Verdi / Størrelse: aksjens plassering (z-score) i egen liste, fra
+//    Finnhubs 13-ukers avkastning, Price/Book og market cap
+//  - Krypto-sentiment: BTC sin bevegelse, som eneste gratis 24/7-signal på "stemningen
+//    i verden" mens USA er stengt
+//  - Olje/sikkerhet fra AmericasOilWatch brukes IKKE som retning (det ville vært å
+//    gjette), men som en demper: store oljebevegelser eller aktive alvorlige
+//    sikkerhetsvarsler trekker prediksjonen nærmere null (mer usikkerhet).
+
+const DEFAULT_WEIGHTS = { market: 1.0, momentum: 0.15, value: 0.05, size: 0.05, crypto: 0.05 };
+const WEIGHT_LABELS = {
+  market: 'Marked (beta × S&P 500)',
+  momentum: 'Momentum (13 uker)',
+  value: 'Verdi (P/B, invertert)',
+  size: 'Størrelse (market cap, invertert)',
+  crypto: 'Krypto-sentiment (BTC)'
+};
+let weights = { ...DEFAULT_WEIGHTS };
+try {
+  const savedWeights = JSON.parse(localStorage.getItem('finnhub_weights') || 'null');
+  if (savedWeights) weights = { ...DEFAULT_WEIGHTS, ...savedWeights };
+} catch (e) { /* ignore malformed saved weights */ }
+
+const weightsGridEl = document.getElementById('weightsGrid');
+function renderWeightsGrid(){
+  weightsGridEl.innerHTML = Object.keys(DEFAULT_WEIGHTS).map(k => `
+    <div>
+      <label for="w_${k}" style="margin-bottom:4px;">${WEIGHT_LABELS[k]}</label>
+      <input type="text" inputmode="decimal" id="w_${k}" value="${weights[k]}">
+    </div>`).join('');
+  Object.keys(DEFAULT_WEIGHTS).forEach(k => {
+    document.getElementById(`w_${k}`).addEventListener('change', e => {
+      const v = parseFloat(String(e.target.value).replace(',', '.'));
+      weights[k] = isFinite(v) ? v : DEFAULT_WEIGHTS[k];
+      e.target.value = weights[k];
+      localStorage.setItem('finnhub_weights', JSON.stringify(weights));
+    });
+  });
+}
+renderWeightsGrid();
+document.getElementById('resetWeightsBtn').addEventListener('click', () => {
+  weights = { ...DEFAULT_WEIGHTS };
+  localStorage.removeItem('finnhub_weights');
+  renderWeightsGrid();
+});
+
+const predictBtn = document.getElementById('predictBtn');
+const predictStatus = document.getElementById('predictStatus');
+
+function nyTradingDayKey(date){
+  const p = getNYParts(date);
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+// Fundamentaldata (beta, market cap, P/B, momentum) endrer seg sakte — cache i
+// 24 timer i localStorage, slik at gjentatte prediksjoner samme dag ikke bruker
+// hele Finnhub-budsjettet på nytt hver gang.
+const METRIC_CACHE_KEY = 'finnhub_metric_cache';
+const METRIC_MAX_AGE_MS = 24 * 3600 * 1000;
+function loadMetricCache(){
+  try { return JSON.parse(localStorage.getItem(METRIC_CACHE_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function saveMetricCache(cache){
+  try { localStorage.setItem(METRIC_CACHE_KEY, JSON.stringify(cache)); }
+  catch (e) { /* storage full or unavailable — ignore, cache is best-effort */ }
+}
+
+async function fetchMetric(symbol, key){
+  const res = await fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(symbol)}&metric=all&token=${encodeURIComponent(key)}`);
+  if (!res.ok) throw new Error(`metric ${res.status}`);
+  const data = await res.json();
+  const m = data.metric || {};
+  return {
+    beta: typeof m.beta === 'number' ? m.beta : 1,
+    marketCap: typeof m.marketCapitalization === 'number' ? m.marketCapitalization : null,
+    pb: (typeof m.pbQuarterly === 'number' && m.pbQuarterly > 0) ? m.pbQuarterly : null,
+    mom13w: typeof m['13WeekPriceReturnDaily'] === 'number' ? m['13WeekPriceReturnDaily'] : null,
+    fetchedAt: Date.now()
+  };
+}
+
+function zscoreMap(entries){
+  const vals = entries.filter(e => e.value !== null && isFinite(e.value)).map(e => e.value);
+  const map = {};
+  if (vals.length < 2){ entries.forEach(e => { map[e.symbol] = 0; }); return map; }
+  const mean = vals.reduce((a,b) => a+b, 0) / vals.length;
+  const variance = vals.reduce((a,b) => a + (b-mean)*(b-mean), 0) / vals.length;
+  const std = Math.sqrt(variance) || 1;
+  entries.forEach(e => { map[e.symbol] = (e.value === null || !isFinite(e.value)) ? 0 : (e.value - mean) / std; });
+  return map;
+}
+
+async function fetchJsonSafe(url){
+  try { const res = await fetch(url); return res.ok ? await res.json() : null; }
+  catch (e) { return null; }
+}
+
+async function fetchOilAndSecurity(){
+  const [wti, brent, marad, centcom] = await Promise.all([
+    fetchJsonSafe('https://americasoilwatch.com/api/v1/wti'),
+    fetchJsonSafe('https://americasoilwatch.com/api/v1/brent'),
+    fetchJsonSafe('https://americasoilwatch.com/api/v1/marad-advisories'),
+    fetchJsonSafe('https://americasoilwatch.com/api/v1/centcom-advisories'),
+  ]);
+  const oilChanges = [wti, brent].filter(x => x && typeof x.changePct === 'number').map(x => x.changePct);
+  const oilChangePct = oilChanges.length ? oilChanges.reduce((a,b) => a+b, 0) / oilChanges.length : 0;
+
+  const severityWeight = sev => ({ critical: 1, high: 0.6, moderate: 0.3, medium: 0.3, low: 0.15 }[String(sev || '').toLowerCase()] ?? 0.15);
+  let securityScore = 0, securityCount = 0;
+  [marad, centcom].forEach(feed => {
+    const list = feed && (feed.advisories || feed.items || feed.entries);
+    if (Array.isArray(list)) list.forEach(a => { securityScore += severityWeight(a.severity); securityCount++; });
+  });
+  return { oilChangePct, securityScore, securityCount, oilOk: oilChanges.length > 0 };
+}
+
+async function runPrediction(){
+  if (Date.now() < cooldownUntil) return;
+  const key = apikeyEl.value.trim();
+  if (!key){ predictStatus.textContent = 'Lim inn API-nøkkel først.'; return; }
+  const symbols = Object.keys(rows).filter(s => rows[s] && !rows[s].pending && !rows[s].error);
+  if (symbols.length === 0){ predictStatus.textContent = 'Hent kurser først — prediksjonen bruker aksjene i tabellen.'; return; }
+
+  predictStatus.textContent = 'Henter marked, krypto, olje og sikkerhetsdata …';
+  const [spyData, btcData, macro] = await Promise.all([
+    fetchJsonSafe(`https://finnhub.io/api/v1/quote?symbol=SPY&token=${encodeURIComponent(key)}`),
+    fetchJsonSafe(`https://finnhub.io/api/v1/quote?symbol=BINANCE:BTCUSDT&token=${encodeURIComponent(key)}`),
+    fetchOilAndSecurity()
+  ]);
+  const spyMove = spyData && typeof spyData.dp === 'number' ? spyData.dp : 0;
+  const btcMove = btcData && typeof btcData.dp === 'number' ? btcData.dp : 0;
+
+  const cache = loadMetricCache();
+  const now = Date.now();
+  const stale = symbols.filter(s => !cache[s] || (now - cache[s].fetchedAt) > METRIC_MAX_AGE_MS);
+  const finnhubCallsUsed = 2 + stale.length; // SPY + BTC + ett /stock/metric per manglende/utdatert symbol
+
+  startGlobalCooldown(finnhubCallsUsed);
+
+  if (stale.length){
+    predictStatus.textContent = `Henter faktordata for ${stale.length} av ${symbols.length} aksjer (resten er cachet siste 24t) …`;
+    for (let i = 0; i < stale.length; i++){
+      try { cache[stale[i]] = await fetchMetric(stale[i], key); }
+      catch (e) { /* behold gammel cache-verdi hvis den finnes, ellers mangler faktordata for denne */ }
+      if (i < stale.length - 1) await sleep(STAGGER_MS);
+    }
+    saveMetricCache(cache);
+  }
+
+  const momZ = zscoreMap(symbols.map(s => ({ symbol: s, value: cache[s] ? cache[s].mom13w : null })));
+  const valueZ = zscoreMap(symbols.map(s => ({ symbol: s, value: (cache[s] && cache[s].pb) ? -cache[s].pb : null })));
+  const sizeZ = zscoreMap(symbols.map(s => ({ symbol: s, value: (cache[s] && cache[s].marketCap) ? -Math.log(cache[s].marketCap) : null })));
+
+  const oilStress = Math.max(0, Math.min(1, Math.abs(macro.oilChangePct) / 3));
+  const secStress = Math.max(0, Math.min(1, macro.securityScore / 3));
+  const dampener = 1 - 0.4 * Math.max(oilStress, secStress);
+
+  const tradingDay = nyTradingDayKey(new Date());
+  symbols.forEach(s => {
+    const beta = cache[s] ? cache[s].beta : 1;
+    const raw = weights.market * (beta * spyMove)
+      + weights.momentum * momZ[s]
+      + weights.value * valueZ[s]
+      + weights.size * sizeZ[s]
+      + weights.crypto * btcMove;
+    const pct = raw * dampener;
+    const direction = pct > 0.15 ? 'opp' : (pct < -0.15 ? 'ned' : 'uendret');
+    predictions[s] = { pct, direction, t: now };
+    savePrediction({
+      symbol: s, t: now, tradingDay, predictedPct: pct, actualPct: null, resolvedAt: null,
+      inputs: { beta, spyMove, btcMove, momZ: momZ[s], valueZ: valueZ[s], sizeZ: sizeZ[s], oilChangePct: macro.oilChangePct, securityScore: macro.securityScore, dampener, weights: { ...weights } }
+    });
+  });
+
+  predictStatus.textContent = `Beregnet for ${symbols.length} aksjer · marked ${spyMove>=0?'+':''}${spyMove.toFixed(2)}% · krypto ${btcMove>=0?'+':''}${btcMove.toFixed(2)}% · olje ${macro.oilOk ? (macro.oilChangePct>=0?'+':'')+macro.oilChangePct.toFixed(2)+'%' : 'utilgjengelig'} · ${macro.securityCount} sikkerhetsvarsler`;
+  renderTable();
+  if (historySymbolEl.value) renderPredictionHistory(historySymbolEl.value);
+}
+
+predictBtn.addEventListener('click', runPrediction);
 </script>
 </body>
 </html>
