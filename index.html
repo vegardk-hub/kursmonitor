@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kursmonitor</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#F5F4F7; --surface:#FFFFFF; --surface-2:#ECEAF1;
+    --ink:#1A1720; --ink-2:#5B5665; --ink-muted:#8D8798;
+    --border:rgba(26,23,32,0.12); --border-strong:rgba(26,23,32,0.22);
+    --accent:#A81753; --accent-ink:#FFFFFF;
+    --up:#0ca30c; --down:#d03b3b;
+    color-scheme:light;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#141219; --surface:#1D1A24; --surface-2:#262230;
+      --ink:#F3F1F6; --ink-2:#B8B2C4; --ink-muted:#847E92;
+      --border:rgba(255,255,255,0.12); --border-strong:rgba(255,255,255,0.24);
+      --accent:#E8598D; --accent-ink:#1A1720;
+      --up:#39c93c; --down:#e66767;
+      color-scheme:dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#141219; --surface:#1D1A24; --surface-2:#262230;
+    --ink:#F3F1F6; --ink-2:#B8B2C4; --ink-muted:#847E92;
+    --border:rgba(255,255,255,0.12); --border-strong:rgba(255,255,255,0.24);
+    --accent:#E8598D; --accent-ink:#1A1720;
+    --up:#39c93c; --down:#e66767;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'Inter',system-ui,sans-serif;}
+  .wrap{max-width:640px;margin:0 auto;padding:40px 20px 60px;}
+  .eyebrow{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.1em;font-size:12px;color:var(--accent);}
+  h1{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:34px;margin:6px 0 8px;letter-spacing:-.01em;}
+  .lede{color:var(--ink-2);font-size:14.5px;line-height:1.55;margin:0 0 28px;max-width:56ch;}
+
+  .setup{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:22px;}
+  .setup label{display:block;font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
+  .row{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:140px;}
+  input[type=text],input[type=password]{
+    width:100%;padding:9px 11px;border-radius:7px;border:1px solid var(--border-strong);
+    background:var(--bg);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:13.5px;
+  }
+  input:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .setup .hint{font-size:11.5px;color:var(--ink-muted);margin-top:-4px;margin-bottom:12px;}
+  .setup .hint a{color:var(--ink-2);}
+  button{
+    font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;letter-spacing:.02em;
+    background:var(--accent);color:var(--accent-ink);border:none;border-radius:7px;
+    padding:10px 20px;font-size:14px;cursor:pointer;
+  }
+  button:hover{filter:brightness(1.08);}
+  button:disabled{opacity:.5;cursor:default;}
+  .autorefresh{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);margin-top:10px;}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:22px 24px;min-height:160px;}
+  .card.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-muted);font-size:13.5px;text-align:center;}
+  .card.error{border-color:var(--down);}
+  .q-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;}
+  .q-symbol{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:20px;}
+  .q-time{font-size:11.5px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;}
+  .q-price{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:42px;line-height:1;margin:6px 0 4px;font-variant-numeric:tabular-nums;}
+  .q-change{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:500;}
+  .q-change.up{color:var(--up);} .q-change.down{color:var(--down);}
+  .q-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);margin-top:18px;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+  .q-grid div{background:var(--surface-2);padding:10px 12px;}
+  .q-grid .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-muted);margin-bottom:3px;}
+  .q-grid .val{font-family:'IBM Plex Mono',monospace;font-size:13.5px;font-variant-numeric:tabular-nums;}
+
+  footer{margin-top:26px;font-size:12px;color:var(--ink-muted);line-height:1.6;}
+  footer a{color:var(--ink-2);}
+  @media (max-width:480px){ .q-grid{grid-template-columns:repeat(2,1fr);} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="eyebrow">Demo &middot; live aksjedata</span>
+  <h1>Kursmonitor</h1>
+  <p class="lede">Henter sanntidskurs direkte fra Finnhub sitt gratis API, i din nettleser &mdash; ingen backend. Nøkkelen din lagres kun lokalt i denne nettleseren, aldri noe annet sted.</p>
+
+  <div class="setup">
+    <div class="row">
+      <div>
+        <label for="apikey">Finnhub API-nøkkel</label>
+        <input type="password" id="apikey" placeholder="lim inn nøkkelen din">
+      </div>
+      <div>
+        <label for="symbol">Symbol</label>
+        <input type="text" id="symbol" value="AAPL">
+      </div>
+    </div>
+    <p class="hint">Gratis nøkkel: opprett konto på <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a> &rarr; nøkkelen ligger på dashbordet ditt. Amerikanske symboler (NASDAQ/NYSE), f.eks. AAPL, MSFT, TSLA.</p>
+    <button id="fetchBtn">Hent kurs</button>
+    <div class="autorefresh">
+      <input type="checkbox" id="auto">
+      <label for="auto" style="margin:0;text-transform:none;font-weight:400;">Oppdater automatisk hvert 15. sekund</label>
+    </div>
+  </div>
+
+  <div class="card empty" id="card">Lim inn API-nøkkel og trykk «Hent kurs»</div>
+
+  <footer>
+    Data: <a href="https://finnhub.io" target="_blank" rel="noopener">Finnhub</a> gratis-API (60 kall/min, sanntid for amerikanske aksjer, personlig/ikke-kommersiell bruk). Nøkkelen sendes direkte fra din nettleser til Finnhub sitt API &mdash; den går aldri via noen mellomtjener.
+  </footer>
+</div>
+
+<script>
+const apikeyEl = document.getElementById('apikey');
+const symbolEl = document.getElementById('symbol');
+const cardEl = document.getElementById('card');
+const btnEl = document.getElementById('fetchBtn');
+const autoEl = document.getElementById('auto');
+let timer = null;
+
+const savedKey = localStorage.getItem('finnhub_key');
+if (savedKey) apikeyEl.value = savedKey;
+
+function fmt(n){ return typeof n === 'number' ? n.toFixed(2) : '–'; }
+
+async function fetchQuote(){
+  const key = apikeyEl.value.trim();
+  const symbol = symbolEl.value.trim().toUpperCase();
+  if (!key){ cardEl.className='card empty'; cardEl.textContent='Lim inn API-nøkkel og trykk «Hent kurs»'; return; }
+  if (!symbol){ return; }
+  localStorage.setItem('finnhub_key', key);
+
+  btnEl.disabled = true;
+  cardEl.className = 'card empty';
+  cardEl.textContent = 'Henter …';
+
+  try {
+    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`);
+    if (res.status === 401){ throw new Error('Ugyldig API-nøkkel (401). Sjekk at du kopierte hele nøkkelen fra Finnhub-dashbordet.'); }
+    if (res.status === 429){ throw new Error('For mange forespørsler (429). Gratisnivået tåler 60 kall/minutt — vent litt.'); }
+    if (!res.ok){ throw new Error(`Finnhub svarte med feilkode ${res.status}.`); }
+    const data = await res.json();
+
+    if (data.c === 0 && data.pc === 0){
+      throw new Error(`Fant ingen data for symbolet "${symbol}". Sjekk stavemåten (amerikanske tickere, f.eks. AAPL).`);
+    }
+
+    const change = data.d;
+    const pct = data.dp;
+    const isUp = change >= 0;
+    const updated = data.t ? new Date(data.t * 1000).toLocaleTimeString('no-NO') : '–';
+
+    cardEl.className = 'card';
+    cardEl.innerHTML = `
+      <div class="q-top">
+        <span class="q-symbol">${symbol}</span>
+        <span class="q-time">Oppdatert ${updated}</span>
+      </div>
+      <div class="q-price">$${fmt(data.c)}</div>
+      <div class="q-change ${isUp ? 'up' : 'down'}">${isUp ? '▲' : '▼'} ${fmt(Math.abs(change))} (${fmt(Math.abs(pct))}%)</div>
+      <div class="q-grid">
+        <div><div class="lbl">Åpning</div><div class="val">$${fmt(data.o)}</div></div>
+        <div><div class="lbl">Høy</div><div class="val">$${fmt(data.h)}</div></div>
+        <div><div class="lbl">Lav</div><div class="val">$${fmt(data.l)}</div></div>
+        <div><div class="lbl">Forrige lukk</div><div class="val">$${fmt(data.pc)}</div></div>
+      </div>`;
+  } catch (err) {
+    cardEl.className = 'card error';
+    cardEl.textContent = err.message || 'Noe gikk galt ved henting av kurs.';
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+btnEl.addEventListener('click', fetchQuote);
+symbolEl.addEventListener('keydown', e => { if (e.key === 'Enter') fetchQuote(); });
+
+autoEl.addEventListener('change', () => {
+  if (autoEl.checked){
+    fetchQuote();
+    timer = setInterval(fetchQuote, 15000);
+  } else if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+});
+</script>
+</body>
+</html>
