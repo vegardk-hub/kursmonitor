@@ -157,6 +157,20 @@
   .pred-compare-row .pred-val{color:var(--accent);font-style:italic;}
   .pred-compare-row .up{color:var(--up);} .pred-compare-row .down{color:var(--down);}
 
+  .news-badge{
+    display:inline-flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;
+    padding:3px 9px;border-radius:100px;border:1px solid var(--border-strong);
+    background:var(--surface-2);color:var(--ink-muted);cursor:pointer;white-space:nowrap;
+  }
+  .news-badge.has-news{border-color:var(--accent);color:var(--accent);}
+  .news-badge:hover{filter:brightness(1.15);}
+  tr.news-row td{background:var(--surface-2);padding:12px 16px;text-align:left;white-space:normal;}
+  .news-item{padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;line-height:1.5;}
+  .news-item:last-child{border-bottom:none;}
+  .news-item a{color:var(--ink);font-weight:600;text-decoration:none;}
+  .news-item a:hover{text-decoration:underline;}
+  .news-item .meta{color:var(--ink-muted);font-size:11px;margin-top:2px;}
+
   footer{margin-top:26px;font-size:12px;color:var(--ink-muted);line-height:1.6;}
   footer a{color:var(--ink-2);}
 </style>
@@ -221,6 +235,17 @@
 
     <div class="disclaimer-box">
       <b>Ikke investeringsråd.</b> Dette er en eksperimentell heuristikk basert på offentlig fundamentaldata og grove makro-proxyer &mdash; <em>ikke</em> en validert statistisk modell, og ikke en ekte regresjon mot Fama-French sine faktordata (krever historiske avkastningsserier som ikke er fritt tilgjengelig). Kortsiktig aksjeprediksjon er notorisk vanskelig. Se «Prediksjon vs. faktisk» i historikken under for modellens reelle treffsikkerhet over tid, i stedet for å stole blindt på tallet.
+      <br><br>
+      <b>Merk:</b> med dagens vekter dominerer markedsleddet (beta &times; S&amp;P 500) sterkt over de selskapsspesifikke faktorene. På en dag der det brede markedet faller, vil derfor de fleste aksjer få negativ prediksjon &mdash; uavhengig av om noe faktisk har skjedd med det enkelte selskapet. Bruk nyhetssøket under for å sjekke det opp mot ekte hendelser.
+    </div>
+  </div>
+
+  <div class="setup" id="newsBox">
+    <label style="margin-bottom:5px;">Nyhetssøk</label>
+    <p class="hint" style="margin-bottom:14px;">Henter faktiske overskrifter fra Finnhub sin nyhets-API for hver aksje i tabellen, siste 2 døgn &mdash; kontrakter, resultater, oppkjøp og annet som kan ha betydning. Rene overskrifter du leser og vurderer selv; <strong>ikke</strong> sentiment-scoret, og påvirker <strong>ikke</strong> prediksjonsmodellen over.</p>
+    <div class="fetch-row">
+      <button id="newsBtn">Søk etter nyheter</button>
+      <span class="fetch-status" id="newsStatus"></span>
     </div>
   </div>
 
@@ -236,10 +261,11 @@
           <th data-key="l">Lav</th>
           <th data-key="pc">Forrige lukk</th>
           <th data-key="predPct">Prediksjon <span class="arrow">&#8597;</span></th>
+          <th data-key="newsCount">Nyheter <span class="arrow">&#8597;</span></th>
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="8" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>
+        <tr><td colspan="9" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>
       </tbody>
     </table>
   </div>
@@ -397,6 +423,8 @@ countSelect.addEventListener('change', () => localStorage.setItem('finnhub_count
 
 let rows = {};        // symbol -> latest quote data
 let predictions = {}; // symbol -> { pct, direction, t } — cleared each page load, recomputed on demand
+let newsData = {};    // symbol -> array of recent headlines (undefined = not searched yet)
+let newsExpanded = new Set(); // symbols whose news row is currently open
 let sortKey = null;
 let sortDir = 1;
 let autoTimer = null;
@@ -409,16 +437,26 @@ function parseSymbols(){
   return [...new Set(symbolsEl.value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))];
 }
 
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 function renderTable(){
   const list = Object.values(rows);
   if (list.length === 0){
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--ink-muted);">Lim inn API-nøkkel og trykk «Hent alle kurser»</td></tr>';
     return;
   }
   if (sortKey === 'predPct'){
     list.sort((a,b) => {
       const av = predictions[a.symbol] ? predictions[a.symbol].pct : -Infinity;
       const bv = predictions[b.symbol] ? predictions[b.symbol].pct : -Infinity;
+      return (av - bv) * sortDir;
+    });
+  } else if (sortKey === 'newsCount'){
+    list.sort((a,b) => {
+      const av = newsData[a.symbol] ? newsData[a.symbol].length : -1;
+      const bv = newsData[b.symbol] ? newsData[b.symbol].length : -1;
       return (av - bv) * sortDir;
     });
   } else if (sortKey){
@@ -432,16 +470,30 @@ function renderTable(){
   }
   tbody.innerHTML = list.map(r => {
     if (r.pending){
-      return `<tr class="row-pending"><td>${r.symbol}</td><td colspan="7">Henter …</td></tr>`;
+      return `<tr class="row-pending"><td>${r.symbol}</td><td colspan="8">Henter …</td></tr>`;
     }
     if (r.error){
-      return `<tr class="row-error"><td>${r.symbol}</td><td colspan="7">${r.error}</td></tr>`;
+      return `<tr class="row-error"><td>${r.symbol}</td><td colspan="8">${r.error}</td></tr>`;
     }
     const isUp = r.d >= 0;
     const pred = predictions[r.symbol];
     const predCell = pred
       ? `<td class="num pred ${pred.direction === 'opp' ? 'up' : pred.direction === 'ned' ? 'down' : ''}"><span class="pred-badge">P</span>${pred.direction === 'opp' ? '▲' : pred.direction === 'ned' ? '▼' : '—'} ${pred.pct >= 0 ? '+' : ''}${fmt(pred.pct)}%</td>`
       : `<td class="num pred-empty">–</td>`;
+
+    const items = newsData[r.symbol];
+    const newsCell = items === undefined
+      ? `<td class="num"><span class="news-badge">–</span></td>`
+      : `<td class="num"><span class="news-badge ${items.length > 0 ? 'has-news' : ''}" onclick="toggleNews('${r.symbol}')">${items.length} ${items.length === 1 ? 'sak' : 'saker'}</span></td>`;
+
+    let expandRow = '';
+    if (newsExpanded.has(r.symbol) && items){
+      const inner = items.length
+        ? items.map(n => `<div class="news-item"><a href="${escapeHtml(n.url)}" target="_blank" rel="noopener">${escapeHtml(n.headline)}</a><div class="meta">${escapeHtml(n.source)} · ${new Date(n.datetime).toLocaleString('no-NO',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div></div>`).join('')
+        : `<p class="hint" style="margin:0;">Ingen nyhetssaker funnet siste ${NEWS_WINDOW_DAYS} døgn for ${r.symbol}.</p>`;
+      expandRow = `<tr class="news-row"><td colspan="9">${inner}</td></tr>`;
+    }
+
     return `<tr>
       <td>${r.symbol}</td>
       <td class="num">$${fmt(r.c)}</td>
@@ -451,8 +503,14 @@ function renderTable(){
       <td class="num">$${fmt(r.l)}</td>
       <td class="num">$${fmt(r.pc)}</td>
       ${predCell}
-    </tr>`;
+      ${newsCell}
+    </tr>${expandRow}`;
   }).join('');
+}
+
+function toggleNews(symbol){
+  if (newsExpanded.has(symbol)) newsExpanded.delete(symbol); else newsExpanded.add(symbol);
+  renderTable();
 }
 
 document.querySelectorAll('thead th[data-key]').forEach(th => {
@@ -764,9 +822,9 @@ document.getElementById('clearHistoryBtn').addEventListener('click', async () =>
 
 refreshHistorySymbolOptions();
 
-// "Hent kurser" og "Beregn prediksjon" bruker samme Finnhub-nøkkel og samme
-// 60-kall/minutt-budsjett, så nedtellingen må være delt — ellers kan man trigge
-// den ene rett etter den andre og likevel treffe 429.
+// "Hent kurser", "Beregn prediksjon" og "Søk etter nyheter" bruker samme
+// Finnhub-nøkkel og samme 60-kall/minutt-budsjett, så nedtellingen må være delt —
+// ellers kan man trigge én rett etter en annen og likevel treffe 429.
 function startGlobalCooldown(usedCalls){
   const seconds = Math.max(usedCalls, 3);
   cooldownUntil = Math.max(cooldownUntil, Date.now() + seconds * 1000);
@@ -778,9 +836,11 @@ function startGlobalCooldown(usedCalls){
       cooldownTimer = null;
       fetchBtn.disabled = false; fetchStatus.textContent = '';
       predictBtn.disabled = false; predictStatus.textContent = '';
+      newsBtn.disabled = false; newsStatus.textContent = '';
     } else {
       fetchBtn.disabled = true; fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
       predictBtn.disabled = true; predictStatus.textContent = `Finnhub-budsjett i bruk — ledig om ${remaining}s`;
+      newsBtn.disabled = true; newsStatus.textContent = `Finnhub-budsjett i bruk — ledig om ${remaining}s`;
     }
   }, 1000);
 }
@@ -1025,6 +1085,79 @@ async function runPrediction(){
 }
 
 predictBtn.addEventListener('click', runPrediction);
+
+// --- Nyhetssøk ---
+// Helt separat fra prediksjonsmodellen: viser rene overskrifter for brukeren å
+// lese selv, ingen sentiment-scoring, og fôres ikke inn i beregningen over.
+
+const NEWS_CACHE_KEY = 'finnhub_news_cache';
+const NEWS_MAX_AGE_MS = 2 * 3600 * 1000; // nyheter blir fort utdatert — kortere cache enn fundamentaldata
+const NEWS_WINDOW_DAYS = 2;
+const NEWS_MAX_ITEMS = 8;
+
+const newsBtn = document.getElementById('newsBtn');
+const newsStatus = document.getElementById('newsStatus');
+
+function loadNewsCache(){
+  try { return JSON.parse(localStorage.getItem(NEWS_CACHE_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+function saveNewsCache(cache){
+  try { localStorage.setItem(NEWS_CACHE_KEY, JSON.stringify(cache)); }
+  catch (e) { /* storage full or unavailable — ignore, cache is best-effort */ }
+}
+function dateStr(d){ return d.toISOString().slice(0, 10); }
+
+async function fetchCompanyNews(symbol, key){
+  const to = new Date();
+  const from = new Date(to.getTime() - NEWS_WINDOW_DAYS * 24 * 3600 * 1000);
+  const res = await fetch(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${dateStr(from)}&to=${dateStr(to)}&token=${encodeURIComponent(key)}`);
+  if (!res.ok) throw new Error(`news ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data)) return [];
+  return data
+    .filter(a => a && a.headline)
+    .sort((a,b) => b.datetime - a.datetime)
+    .slice(0, NEWS_MAX_ITEMS)
+    .map(a => ({ headline: a.headline, source: a.source || 'ukjent kilde', url: a.url, datetime: a.datetime * 1000 }));
+}
+
+async function runNewsSearch(){
+  if (Date.now() < cooldownUntil) return;
+  const key = apikeyEl.value.trim();
+  if (!key){ newsStatus.textContent = 'Lim inn API-nøkkel først.'; return; }
+  const symbols = Object.keys(rows).filter(s => rows[s] && !rows[s].pending && !rows[s].error);
+  if (symbols.length === 0){ newsStatus.textContent = 'Hent kurser først — nyhetssøket bruker aksjene i tabellen.'; return; }
+
+  const cache = loadNewsCache();
+  const now = Date.now();
+  const stale = symbols.filter(s => !cache[s] || (now - cache[s].fetchedAt) > NEWS_MAX_AGE_MS);
+
+  if (stale.length === 0){
+    symbols.forEach(s => { newsData[s] = cache[s].items; });
+    newsStatus.textContent = `Alle ${symbols.length} sjekket for under 2 timer siden — viser cachet resultat.`;
+    renderTable();
+    return;
+  }
+
+  startGlobalCooldown(stale.length);
+  newsStatus.textContent = `Søker nyheter for ${stale.length} av ${symbols.length} aksjer …`;
+
+  for (let i = 0; i < stale.length; i++){
+    const s = stale[i];
+    try { cache[s] = { items: await fetchCompanyNews(s, key), fetchedAt: Date.now() }; }
+    catch (e) { if (!cache[s]) cache[s] = { items: [], fetchedAt: 0 }; } // ikke marker som fersk ved feil
+    if (i < stale.length - 1) await sleep(STAGGER_MS);
+  }
+  saveNewsCache(cache);
+  symbols.forEach(s => { newsData[s] = (cache[s] && cache[s].items) || []; });
+
+  const withNews = symbols.filter(s => newsData[s] && newsData[s].length > 0).length;
+  newsStatus.textContent = `Ferdig — ${withNews} av ${symbols.length} aksjer har nyheter siste ${NEWS_WINDOW_DAYS} døgn.`;
+  renderTable();
+}
+
+newsBtn.addEventListener('click', runNewsSearch);
 </script>
 </body>
 </html>
