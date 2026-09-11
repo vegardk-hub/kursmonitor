@@ -86,6 +86,7 @@
     background:var(--bg);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer;
   }
   .count-picker select:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .count-picker select:disabled{opacity:.5;cursor:default;}
 
   .rate-note{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 13px;font-size:12px;color:var(--ink-2);margin-bottom:22px;line-height:1.55;}
   .rate-note b{color:var(--ink);}
@@ -312,6 +313,7 @@ let sortKey = null;
 let sortDir = 1;
 let autoTimer = null;
 let cooldownTimer = null;
+let cooldownUntil = 0;   // Date.now()-timestamp; blocks fetchAll from actually running until passed
 
 function fmt(n){ return typeof n === 'number' ? n.toFixed(2) : '–'; }
 
@@ -387,6 +389,7 @@ function startCooldown(usedCalls){
   // Cooldown scales with how much of the 60-calls/minute budget this batch spent,
   // so a small pull (e.g. 10 aksjer) is available again much sooner than a full 60.
   const seconds = Math.max(usedCalls, 3);
+  cooldownUntil = Date.now() + seconds * 1000;
   fetchBtn.disabled = true;
   let remaining = seconds;
   fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
@@ -404,6 +407,11 @@ function startCooldown(usedCalls){
 }
 
 async function fetchAll(){
+  // Hard guard against overlapping calls: a manual click, the auto-refresh timer
+  // and re-enabling auto-refresh can all try to trigger a fetch at once — this
+  // makes the cooldown actually block the request, not just disable the button visually.
+  if (Date.now() < cooldownUntil) return;
+
   const key = apikeyEl.value.trim();
   if (!key){ fetchStatus.textContent = 'Lim inn API-nøkkel først.'; return; }
   localStorage.setItem('finnhub_key', key);
@@ -434,10 +442,21 @@ fetchBtn.addEventListener('click', fetchAll);
 
 autoEl.addEventListener('change', () => {
   if (autoEl.checked){
-    fetchAll();
-    const intervalMs = (Math.max(+countSelect.value || 60, 3) + 5) * 1000;
-    autoTimer = setInterval(fetchAll, intervalMs);
-  } else if (autoTimer) {
+    countSelect.disabled = true;
+    const waitMs = Math.max(0, cooldownUntil - Date.now());
+    if (waitMs > 0){
+      fetchStatus.textContent = `Auto-oppdatering venter til nedtellingen er ferdig …`;
+    }
+    // Wait out any cooldown already in progress (e.g. from a manual "Hent kurser"
+    // click) before the first auto fetch, instead of firing into the guard and no-op'ing.
+    autoTimer = setTimeout(function startLoop(){
+      fetchAll();
+      const intervalMs = (Math.max(+countSelect.value || 60, 3) + 5) * 1000;
+      autoTimer = setInterval(fetchAll, intervalMs);
+    }, waitMs);
+  } else {
+    countSelect.disabled = false;
+    clearTimeout(autoTimer);
     clearInterval(autoTimer);
     autoTimer = null;
   }
