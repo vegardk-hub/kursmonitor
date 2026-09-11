@@ -13,6 +13,7 @@
     --border:rgba(26,23,32,0.12); --border-strong:rgba(26,23,32,0.22);
     --accent:#A81753; --accent-ink:#FFFFFF;
     --up:#0ca30c; --down:#d03b3b;
+    --up-soft:rgba(12,163,12,0.14); --down-soft:rgba(208,59,59,0.12);
     color-scheme:light;
   }
   @media (prefers-color-scheme: dark){
@@ -22,6 +23,7 @@
       --border:rgba(255,255,255,0.12); --border-strong:rgba(255,255,255,0.24);
       --accent:#E8598D; --accent-ink:#1A1720;
       --up:#39c93c; --down:#e66767;
+      --up-soft:rgba(57,201,60,0.18); --down-soft:rgba(230,103,103,0.16);
       color-scheme:dark;
     }
   }
@@ -31,6 +33,7 @@
     --border:rgba(255,255,255,0.12); --border-strong:rgba(255,255,255,0.24);
     --accent:#E8598D; --accent-ink:#1A1720;
     --up:#39c93c; --down:#e66767;
+    --up-soft:rgba(57,201,60,0.18); --down-soft:rgba(230,103,103,0.16);
     color-scheme:dark;
   }
   *{box-sizing:border-box;}
@@ -39,6 +42,21 @@
   .eyebrow{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.1em;font-size:12px;color:var(--accent);}
   h1{font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:34px;margin:6px 0 8px;letter-spacing:-.01em;}
   .lede{color:var(--ink-2);font-size:14.5px;line-height:1.55;margin:0 0 28px;max-width:56ch;}
+
+  .market-status{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:22px;}
+  .ms-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;}
+  .ms-pill{display:inline-flex;align-items:center;gap:6px;font-family:'Barlow Semi Condensed',sans-serif;font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;padding:5px 12px;border-radius:100px;}
+  .ms-pill.open{background:var(--up-soft);color:var(--up);}
+  .ms-pill.closed{background:var(--down-soft);color:var(--down);}
+  .ms-pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none;}
+  .ms-now{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-muted);}
+  .ms-track{position:relative;height:26px;background:var(--surface-2);border-radius:6px;border:1px solid var(--border);}
+  .ms-window{position:absolute;top:-1px;bottom:-1px;background:var(--up-soft);border-left:2px solid var(--up);border-right:2px solid var(--up);}
+  .ms-now-marker{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);}
+  .ms-now-marker::after{content:'';position:absolute;top:-3px;left:50%;transform:translateX(-50%);width:8px;height:8px;border-radius:50%;background:var(--ink);}
+  .ms-ticks{position:relative;height:16px;margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ink-muted);}
+  .ms-ticks span{position:absolute;transform:translateX(-50%);}
+  .ms-note{font-size:12px;color:var(--ink-2);margin:14px 0 0;line-height:1.5;}
 
   .setup{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:22px;}
   .setup label{display:block;font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
@@ -85,6 +103,19 @@
   <h1>Kursmonitor</h1>
   <p class="lede">Henter sanntidskurs direkte fra Finnhub sitt gratis API, i din nettleser &mdash; ingen backend. Nøkkelen din lagres kun lokalt i denne nettleseren, aldri noe annet sted.</p>
 
+  <div class="market-status">
+    <div class="ms-top">
+      <span class="ms-pill" id="msPill">—</span>
+      <span class="ms-now" id="msNow"></span>
+    </div>
+    <div class="ms-track">
+      <div class="ms-window" id="msWindow"></div>
+      <div class="ms-now-marker" id="msMarker"></div>
+    </div>
+    <div class="ms-ticks" id="msTicks"></div>
+    <p class="ms-note" id="msNote">Beregner …</p>
+  </div>
+
   <div class="setup">
     <div class="row">
       <div>
@@ -108,10 +139,96 @@
 
   <footer>
     Data: <a href="https://finnhub.io" target="_blank" rel="noopener">Finnhub</a> gratis-API (60 kall/min, sanntid for amerikanske aksjer, personlig/ikke-kommersiell bruk). Nøkkelen sendes direkte fra din nettleser til Finnhub sitt API &mdash; den går aldri via noen mellomtjener.
+    <br><br>
+    Handelsvinduet over viser ordinær åpningstid (09:30&ndash;16:00 amerikansk østkysttid, NASDAQ/NYSE), regnet om til din lokale tid og korrigert for sommertid automatisk. Den tar <strong>ikke</strong> høyde for amerikanske børshelligdager (f.eks. Thanksgiving, 4. juli, Labor Day) &mdash; markedet kan vise «åpent» på dager det i praksis er stengt.
   </footer>
 </div>
 
 <script>
+const MARKET_OPEN = { h: 9, m: 30 };
+const MARKET_CLOSE = { h: 16, m: 0 };
+
+function getNYParts(date){
+  const parts = {};
+  new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short'
+  }).formatToParts(date).forEach(p => { if (p.type !== 'literal') parts[p.type] = p.value; });
+  return parts;
+}
+
+// Offset (ms) between "New York wall-clock read as UTC" and the real UTC instant.
+// Lets us convert an NY wall-clock time on a given date into the correct real instant,
+// automatically right through DST changes (US and EU shift on different dates).
+function nyOffsetMs(date){
+  const p = getNYParts(date);
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+  return asUTC - date.getTime();
+}
+
+function fmtDuration(ms){
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  const h = Math.floor(totalMin / 60), m = totalMin % 60;
+  return h > 0 ? `${h}t ${m}min` : `${m}min`;
+}
+
+function renderMsTicks(){
+  const el = document.getElementById('msTicks');
+  [0,3,6,9,12,15,18,21].forEach(h => {
+    const s = document.createElement('span');
+    s.style.left = (h/24*100) + '%';
+    s.textContent = String(h).padStart(2,'0') + ':00';
+    el.appendChild(s);
+  });
+}
+
+function updateMarketStatus(){
+  const now = new Date();
+  const offset = nyOffsetMs(now);
+  const p = getNYParts(now);
+  const y = +p.year, m = +p.month, d = +p.day;
+  const isWeekend = p.weekday === 'Sat' || p.weekday === 'Sun';
+
+  const openInstant = Date.UTC(y, m-1, d, MARKET_OPEN.h, MARKET_OPEN.m, 0) - offset;
+  const closeInstant = Date.UTC(y, m-1, d, MARKET_CLOSE.h, MARKET_CLOSE.m, 0) - offset;
+  const isOpenNow = !isWeekend && now.getTime() >= openInstant && now.getTime() < closeInstant;
+
+  const localDayStart = new Date(now); localDayStart.setHours(0,0,0,0);
+  const dayMs = 24 * 3600 * 1000;
+  const pct = t => Math.max(0, Math.min(100, (t - localDayStart.getTime()) / dayMs * 100));
+  const openPct = pct(openInstant), closePct = pct(closeInstant), nowPct = pct(now.getTime());
+
+  const windowEl = document.getElementById('msWindow');
+  windowEl.style.left = openPct + '%';
+  windowEl.style.width = Math.max(0.6, closePct - openPct) + '%';
+  document.getElementById('msMarker').style.left = nowPct + '%';
+
+  const pill = document.getElementById('msPill');
+  pill.className = 'ms-pill ' + (isOpenNow ? 'open' : 'closed');
+  pill.innerHTML = `<span class="dot"></span>${isOpenNow ? 'Marked åpent' : 'Marked stengt'}`;
+
+  document.getElementById('msNow').textContent =
+    `Din tid ${now.toLocaleTimeString('no-NO',{hour:'2-digit',minute:'2-digit'})} · New York ${now.toLocaleTimeString('en-US',{timeZone:'America/New_York',hour12:false,hour:'2-digit',minute:'2-digit'})}`;
+
+  const openStr = new Date(openInstant).toLocaleTimeString('no-NO',{hour:'2-digit',minute:'2-digit'});
+  const closeStr = new Date(closeInstant).toLocaleTimeString('no-NO',{hour:'2-digit',minute:'2-digit'});
+  const note = document.getElementById('msNote');
+  if (isWeekend){
+    note.textContent = `Helg — det amerikanske markedet handler ikke. Vanlig handelsvindu er ${openStr}–${closeStr} din tid på hverdager.`;
+  } else if (isOpenNow){
+    note.textContent = `Åpent til ${closeStr} din tid — stenger om ${fmtDuration(closeInstant - now.getTime())}.`;
+  } else if (now.getTime() < openInstant){
+    note.textContent = `Stengt nå — åpner ${openStr} din tid, om ${fmtDuration(openInstant - now.getTime())}.`;
+  } else {
+    note.textContent = `Stengt for i dag — åpner igjen ${openStr} din tid neste handelsdag.`;
+  }
+}
+
+renderMsTicks();
+updateMarketStatus();
+setInterval(updateMarketStatus, 1000);
+
 const apikeyEl = document.getElementById('apikey');
 const symbolEl = document.getElementById('symbol');
 const cardEl = document.getElementById('card');
