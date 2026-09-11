@@ -80,6 +80,12 @@
   .fetch-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;}
   .fetch-status{font-size:12.5px;color:var(--ink-muted);font-family:'IBM Plex Mono',monospace;}
   .autorefresh{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink-2);}
+  .count-picker{display:flex;align-items:center;gap:8px;font-size:12.5px;}
+  .count-picker select{
+    padding:8px 10px;border-radius:7px;border:1px solid var(--border-strong);
+    background:var(--bg);color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:13px;cursor:pointer;
+  }
+  .count-picker select:focus{outline:2px solid var(--accent);outline-offset:1px;}
 
   .rate-note{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:10px 13px;font-size:12px;color:var(--ink-2);margin-bottom:22px;line-height:1.55;}
   .rate-note b{color:var(--ink);}
@@ -136,17 +142,21 @@
     <p class="hint">Gratis nøkkel: opprett konto på <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a> &rarr; nøkkelen ligger på dashbordet ditt. Rediger listen fritt &mdash; den lagres i denne nettleseren.</p>
 
     <div class="fetch-row">
-      <button id="fetchBtn">Hent alle kurser</button>
+      <span class="count-picker">
+        <label for="countSelect" style="margin:0;text-transform:none;font-weight:400;color:var(--ink-2);">Antall aksjer</label>
+        <select id="countSelect"></select>
+      </span>
+      <button id="fetchBtn">Hent kurser</button>
       <span class="fetch-status" id="fetchStatus"></span>
       <span class="autorefresh">
         <input type="checkbox" id="auto">
-        <label for="auto" style="margin:0;text-transform:none;font-weight:400;">Auto-oppdater hvert 65. sekund</label>
+        <label for="auto" style="margin:0;text-transform:none;font-weight:400;">Auto-oppdater</label>
       </span>
     </div>
   </div>
 
   <div class="rate-note">
-    <b>Gratisnivået tillater 60 API-kall i minuttet</b>, og <code>/quote</code> gir én aksje per kall &mdash; det finnes ikke noe samle-endepunkt. En full oppdatering av 60 aksjer bruker derfor hele minuttbudsjettet på én gang. Knappen låses i 60 sekunder etter hver oppdatering slik at du ikke går tom for kall (kode 429).
+    <b>Gratisnivået tillater 60 API-kall i minuttet</b>, og <code>/quote</code> gir én aksje per kall &mdash; det finnes ikke noe samle-endepunkt. Velg hvor mange aksjer du vil hente av gangen: et lite antall (f.eks. 10) bruker lite av budsjettet og er klart igjen for ny henting på sekunder, mens 60 bruker hele minuttbudsjettet. Knappen låses proporsjonalt med antallet du henter, slik at du ikke går tom for kall (kode 429).
   </div>
 
   <div class="table-wrap">
@@ -271,11 +281,12 @@ const DEFAULT_SYMBOLS = [
   'XOM','CVX','CAT','BA','GE','HON','UNP','UPS','T','VZ'
 ];
 const MAX_SYMBOLS = 60;
+const COUNT_OPTIONS = [1, 10, 20, 30, 40, 50, 60];
 const STAGGER_MS = 90;      // spacing between requests — keeps us under the 30/sec hard cap
-const COOLDOWN_SEC = 60;    // a full batch spends the whole per-minute budget
 
 const apikeyEl = document.getElementById('apikey');
 const symbolsEl = document.getElementById('symbols');
+const countSelect = document.getElementById('countSelect');
 const fetchBtn = document.getElementById('fetchBtn');
 const fetchStatus = document.getElementById('fetchStatus');
 const autoEl = document.getElementById('auto');
@@ -285,6 +296,16 @@ const savedKey = localStorage.getItem('finnhub_key');
 if (savedKey) apikeyEl.value = savedKey;
 const savedList = localStorage.getItem('finnhub_watchlist');
 symbolsEl.value = savedList || DEFAULT_SYMBOLS.join(', ');
+
+COUNT_OPTIONS.forEach(n => {
+  const opt = document.createElement('option');
+  opt.value = n;
+  opt.textContent = n;
+  countSelect.appendChild(opt);
+});
+const savedCount = localStorage.getItem('finnhub_count');
+countSelect.value = COUNT_OPTIONS.includes(+savedCount) ? savedCount : 60;
+countSelect.addEventListener('change', () => localStorage.setItem('finnhub_count', countSelect.value));
 
 let rows = {};      // symbol -> latest data
 let sortKey = null;
@@ -362,7 +383,10 @@ async function fetchOne(symbol, key){
   renderTable();
 }
 
-function startCooldown(seconds){
+function startCooldown(usedCalls){
+  // Cooldown scales with how much of the 60-calls/minute budget this batch spent,
+  // so a small pull (e.g. 10 aksjer) is available again much sooner than a full 60.
+  const seconds = Math.max(usedCalls, 3);
   fetchBtn.disabled = true;
   let remaining = seconds;
   fetchStatus.textContent = `Neste oppdatering mulig om ${remaining}s`;
@@ -384,19 +408,20 @@ async function fetchAll(){
   if (!key){ fetchStatus.textContent = 'Lim inn API-nøkkel først.'; return; }
   localStorage.setItem('finnhub_key', key);
 
+  const wanted = Math.min(+countSelect.value || 60, MAX_SYMBOLS);
   let symbols = parseSymbols();
   if (symbols.length === 0) return;
-  let truncated = false;
-  if (symbols.length > MAX_SYMBOLS){ symbols = symbols.slice(0, MAX_SYMBOLS); truncated = true; }
   localStorage.setItem('finnhub_watchlist', symbols.join(', '));
+  const shortOfList = wanted > symbols.length;
+  symbols = symbols.slice(0, wanted);
 
   rows = {};
   symbols.forEach(s => { rows[s] = { symbol: s, pending: true }; });
   renderTable();
 
-  startCooldown(COOLDOWN_SEC);
-  fetchStatus.textContent = truncated
-    ? `Henter de første ${MAX_SYMBOLS} (listen din hadde flere) …`
+  startCooldown(symbols.length);
+  fetchStatus.textContent = shortOfList
+    ? `Henter alle ${symbols.length} (listen din har færre enn ${wanted}) …`
     : `Henter ${symbols.length} kurser …`;
 
   for (let i = 0; i < symbols.length; i++){
@@ -410,7 +435,8 @@ fetchBtn.addEventListener('click', fetchAll);
 autoEl.addEventListener('change', () => {
   if (autoEl.checked){
     fetchAll();
-    autoTimer = setInterval(fetchAll, 65000);
+    const intervalMs = (Math.max(+countSelect.value || 60, 3) + 5) * 1000;
+    autoTimer = setInterval(fetchAll, intervalMs);
   } else if (autoTimer) {
     clearInterval(autoTimer);
     autoTimer = null;
