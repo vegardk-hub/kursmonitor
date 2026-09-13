@@ -288,6 +288,32 @@
     <div id="predCompare"></div>
   </div>
 
+  <div class="setup" id="overviewBox">
+    <div class="history-head">
+      <div>
+        <label for="overviewDay" style="margin-bottom:5px;">Prediksjonsoversikt &mdash; alle aksjer</label>
+        <select id="overviewDay"><option value="">– ingen data –</option></select>
+      </div>
+    </div>
+    <p class="history-meta" id="overviewSummary" style="margin-top:0;"></p>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="symbol">Symbol <span class="arrow">&#8597;</span></th>
+            <th data-key="predictedPct">Predikert <span class="arrow">&#8597;</span></th>
+            <th data-key="actualPct">Faktisk <span class="arrow">&#8597;</span></th>
+            <th data-key="diff">Avvik <span class="arrow">&#8597;</span></th>
+            <th data-key="hit">Retning <span class="arrow">&#8597;</span></th>
+          </tr>
+        </thead>
+        <tbody id="overviewTbody">
+          <tr><td colspan="5" style="text-align:center;color:var(--ink-muted);">Ingen prediksjoner lagret ennå.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <footer>
     Data: <a href="https://finnhub.io" target="_blank" rel="noopener">Finnhub</a> gratis-API (60 kall/min, sanntid for amerikanske aksjer, personlig/ikke-kommersiell bruk). Nøkkelen sendes direkte fra din nettleser til Finnhub sitt API &mdash; den går aldri via noen mellomtjener.
     <br><br>
@@ -540,6 +566,8 @@ async function fetchOne(symbol, key){
       saveObservation(observation).then(() => onObservationSaved(symbol));
       resolveOldestPrediction(symbol, data.dp, observedAt).then(() => {
         if (historySymbolEl && historySymbolEl.value === symbol) renderPredictionHistory(symbol);
+        const overviewDaySel = document.getElementById('overviewDay');
+        if (overviewDaySel && overviewDaySel.value) renderOverview(overviewDaySel.value);
       });
     }
   } catch (err) {
@@ -622,6 +650,16 @@ async function getAllHistory(){
   if (!db) return [];
   return new Promise(resolve => {
     const req = db.transaction(HISTORY_STORE, 'readonly').objectStore(HISTORY_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+
+async function getAllPredictions(){
+  const db = await historyDbPromise;
+  if (!db) return [];
+  return new Promise(resolve => {
+    const req = db.transaction(PREDICTIONS_STORE, 'readonly').objectStore(PREDICTIONS_STORE).getAll();
     req.onsuccess = () => resolve(req.result || []);
     req.onerror = () => resolve([]);
   });
@@ -795,6 +833,101 @@ async function renderPredictionHistory(symbol){
     <div class="pred-compare-head"><span>Tidspunkt</span><span>Predikert</span><span>Faktisk</span></div>
     ${rowsHtml}`;
 }
+
+// --- Prediksjonsoversikt: alle aksjer, én dag av gangen ---
+// Samme "riktig retning"-definisjon som i renderPredictionHistory (±0.15 poeng = "flatt").
+let overviewSortKey = 'symbol';
+let overviewSortDir = 1;
+let overviewRows = [];
+const DIRECTION_FLAT_BAND = 0.15;
+function directionHit(predictedPct, actualPct){
+  const flat = v => Math.abs(v) < DIRECTION_FLAT_BAND;
+  return Math.sign(predictedPct) === Math.sign(actualPct) || (flat(predictedPct) && flat(actualPct));
+}
+
+async function refreshOverviewDays(){
+  const all = await getAllPredictions();
+  const days = [...new Set(all.map(p => p.tradingDay))].sort().reverse();
+  const sel = document.getElementById('overviewDay');
+  const current = sel.value;
+  sel.innerHTML = days.length ? days.map(d => `<option value="${d}">${d}</option>`).join('') : '<option value="">– ingen data –</option>';
+  const toSelect = days.includes(current) ? current : (days[0] || '');
+  sel.value = toSelect;
+  if (toSelect) renderOverview(toSelect);
+}
+
+async function renderOverview(day){
+  const all = await getAllPredictions();
+  // Flest en rad per symbol denne dagen: behold siste kjøring hvis prediksjon ble beregnet flere ganger.
+  const bySymbol = {};
+  all.filter(p => p.tradingDay === day).forEach(p => {
+    if (!bySymbol[p.symbol] || p.t > bySymbol[p.symbol].t) bySymbol[p.symbol] = p;
+  });
+  overviewRows = Object.values(bySymbol);
+
+  const resolved = overviewRows.filter(p => p.actualPct !== null && p.actualPct !== undefined);
+  const summaryEl = document.getElementById('overviewSummary');
+  if (resolved.length){
+    const correct = resolved.filter(p => directionHit(p.predictedPct, p.actualPct)).length;
+    const avgErr = resolved.reduce((s,p) => s + Math.abs(p.predictedPct - p.actualPct), 0) / resolved.length;
+    summaryEl.textContent = `${resolved.length} av ${overviewRows.length} løst · retning riktig ${correct}/${resolved.length} (${(correct/resolved.length*100).toFixed(0)}%) · snittavvik ${avgErr.toFixed(2)} prosentpoeng`;
+  } else {
+    summaryEl.textContent = `${overviewRows.length} prediksjoner denne dagen, ingen løst ennå — venter på ferske kurser (trykk «Hent kurser»).`;
+  }
+  renderOverviewTable();
+}
+
+function renderOverviewTable(){
+  const tbody = document.getElementById('overviewTbody');
+  if (overviewRows.length === 0){
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--ink-muted);">Ingen prediksjoner denne dagen.</td></tr>';
+    return;
+  }
+  const list = [...overviewRows];
+  list.sort((a,b) => {
+    let av, bv;
+    if (overviewSortKey === 'diff'){
+      av = (a.actualPct == null) ? Infinity : Math.abs(a.predictedPct - a.actualPct);
+      bv = (b.actualPct == null) ? Infinity : Math.abs(b.predictedPct - b.actualPct);
+    } else if (overviewSortKey === 'hit'){
+      const hitVal = p => (p.actualPct == null) ? -1 : (directionHit(p.predictedPct, p.actualPct) ? 1 : 0);
+      av = hitVal(a); bv = hitVal(b);
+    } else {
+      av = a[overviewSortKey]; bv = b[overviewSortKey];
+    }
+    if (av === undefined || av === null) return 1;
+    if (bv === undefined || bv === null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * overviewSortDir;
+    return (av - bv) * overviewSortDir;
+  });
+  tbody.innerHTML = list.map(p => {
+    const predTxt = `${p.predictedPct >= 0 ? '+' : ''}${p.predictedPct.toFixed(2)}%`;
+    if (p.actualPct === null || p.actualPct === undefined){
+      return `<tr><td>${p.symbol}</td><td class="num pred">${predTxt}</td><td class="num" style="color:var(--ink-muted)">venter …</td><td class="num">–</td><td class="num">–</td></tr>`;
+    }
+    const hit = directionHit(p.predictedPct, p.actualPct);
+    const diff = Math.abs(p.predictedPct - p.actualPct);
+    return `<tr>
+      <td>${p.symbol}</td>
+      <td class="num pred">${predTxt}</td>
+      <td class="num change ${p.actualPct >= 0 ? 'up' : 'down'}">${p.actualPct >= 0 ? '+' : ''}${p.actualPct.toFixed(2)}%</td>
+      <td class="num">${diff.toFixed(2)}</td>
+      <td class="num" style="color:${hit ? 'var(--up)' : 'var(--down)'}">${hit ? 'Riktig' : 'Feil'}</td>
+    </tr>`;
+  }).join('');
+}
+
+document.querySelectorAll('#overviewBox thead th[data-key]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    overviewSortDir = (overviewSortKey === key) ? overviewSortDir * -1 : 1;
+    overviewSortKey = key;
+    renderOverviewTable();
+  });
+});
+document.getElementById('overviewDay').addEventListener('change', e => { if (e.target.value) renderOverview(e.target.value); });
+
+refreshOverviewDays();
 
 document.getElementById('exportBtn').addEventListener('click', async () => {
   const all = (await getAllHistory()).sort((a,b) => a.symbol.localeCompare(b.symbol) || a.t - b.t);
@@ -1082,6 +1215,7 @@ async function runPrediction(){
   predictStatus.textContent = `Beregnet for ${symbols.length} aksjer · marked ${spyMove>=0?'+':''}${spyMove.toFixed(2)}% · krypto ${btcMove>=0?'+':''}${btcMove.toFixed(2)}% · olje ${macro.oilOk ? (macro.oilChangePct>=0?'+':'')+macro.oilChangePct.toFixed(2)+'%' : 'utilgjengelig'} · ${macro.securityCount} sikkerhetsvarsler`;
   renderTable();
   if (historySymbolEl.value) renderPredictionHistory(historySymbolEl.value);
+  refreshOverviewDays();
 }
 
 predictBtn.addEventListener('click', runPrediction);
